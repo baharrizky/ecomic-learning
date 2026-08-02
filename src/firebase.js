@@ -2,15 +2,13 @@ import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
-// GANTI nilai-nilai di bawah ini dengan konfigurasi dari Firebase Console
-// project BARU kamu (Project settings -> General -> Your apps -> SDK setup)
 const firebaseConfig = {
-  apiKey: "GANTI_API_KEY",
-  authDomain: "GANTI_PROJECT.firebaseapp.com",
-  projectId: "GANTI_PROJECT_ID",
-  storageBucket: "GANTI_PROJECT.appspot.com",
-  messagingSenderId: "GANTI_SENDER_ID",
-  appId: "GANTI_APP_ID",
+  apiKey: "AIzaSyB8N6b0R_xlodysKuVABXPBePqM-g15p8Q",
+  authDomain: "ecomic-learning.firebaseapp.com",
+  projectId: "ecomic-learning",
+  storageBucket: "ecomic-learning.firebasestorage.app",
+  messagingSenderId: "591974735194",
+  appId: "1:591974735194:web:cb58f42d4fde88cd9ca763",
 };
 
 const app = initializeApp(firebaseConfig);
