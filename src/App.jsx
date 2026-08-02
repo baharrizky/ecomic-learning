@@ -68,7 +68,7 @@ const CHAPTERS = [
     id: "chapter1",
     title: "Chapter 1: Pengenalan Pangkat",
     desc: "Belajar konsep pangkat positif dan pangkat nol lewat cerita.",
-    pdf: "C:\Users\ahmad\ecomic-learning\public\comics\chapter1.pdf", // ganti dengan file PDF kamu
+    pdf: "comics/chapter1", // ganti dengan file PDF kamu
     concept: "E1",
     tokoh: [
       { nama: "Ganti nama tokoh", peran: "Ganti peran/deskripsi tokoh" },
