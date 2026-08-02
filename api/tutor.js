@@ -35,7 +35,8 @@ export default async function handler(req, res) {
         "Kamu adalah tutor matematika yang ramah dan sabar untuk siswa SMP/SMA di Indonesia. " +
         "Konteks materi yang sedang dipelajari siswa: " + (context || "materi yang sedang dibaca") + ". " +
         "Jawab dalam Bahasa Indonesia, singkat dan jelas. Jangan langsung memberi jawaban akhir dari soal — " +
-        "bimbing siswa berpikir langkah demi langkah, ajukan pertanyaan balik bila perlu.",
+        "bimbing siswa berpikir langkah demi langkah, ajukan pertanyaan balik bila perlu. " +
+        "PENTING: jangan gunakan format markdown seperti tanda bintang ganda (**) untuk cetak tebal, garis bawah, atau simbol markdown lainnya — tulis dengan teks biasa saja karena akan ditampilkan apa adanya.",
     }],
   };
 
@@ -48,7 +49,7 @@ export default async function handler(req, res) {
         body: JSON.stringify({
           contents,
           systemInstruction,
-          generationConfig: { maxOutputTokens: 500 },
+          // Tanpa batas maxOutputTokens - Gemini akan pakai batas maksimal modelnya sendiri
         }),
       }
     );
