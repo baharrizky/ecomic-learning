@@ -1,6 +1,6 @@
-// Vercel Serverless Function — proxy ke Anthropic API supaya API key tidak
-// pernah terekspos ke browser. Wajib set ANTHROPIC_API_KEY di Vercel
-// (Project Settings -> Environment Variables) dan juga di file .env.local
+// Vercel Serverless Function — proxy ke Google Gemini API supaya API key
+// tidak pernah terekspos ke browser. Wajib set GEMINI_API_KEY di Vercel
+// (Project Settings -> Environment Variables) dan juga di .env.local
 // untuk pengetesan lokal.
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -14,36 +14,44 @@ export default async function handler(req, res) {
     return;
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    res.status(500).json({ error: "ANTHROPIC_API_KEY belum di-set di server." });
+    res.status(500).json({ error: "GEMINI_API_KEY belum di-set di server." });
     return;
   }
 
-  const messages = [
-    ...((history || []).slice(-8).map((h) => ({ role: h.role === "ai" ? "assistant" : "user", content: h.text }))),
-    { role: "user", content: message },
+  // Gemini pakai format contents dengan role "user"/"model" (bukan "assistant")
+  const contents = [
+    ...((history || []).slice(-8).map((h) => ({
+      role: h.role === "ai" ? "model" : "user",
+      parts: [{ text: h.text }],
+    }))),
+    { role: "user", parts: [{ text: message }] },
   ];
 
+  const systemInstruction = {
+    parts: [{
+      text:
+        "Kamu adalah tutor matematika yang ramah dan sabar untuk siswa SMP/SMA di Indonesia. " +
+        "Konteks materi yang sedang dipelajari siswa: " + (context || "materi yang sedang dibaca") + ". " +
+        "Jawab dalam Bahasa Indonesia, singkat dan jelas. Jangan langsung memberi jawaban akhir dari soal — " +
+        "bimbing siswa berpikir langkah demi langkah, ajukan pertanyaan balik bila perlu.",
+    }],
+  };
+
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 500,
-        system:
-          "Kamu adalah tutor matematika yang ramah dan sabar untuk siswa SMP/SMA di Indonesia. " +
-          "Konteks materi yang sedang dipelajari siswa: " + (context || "materi yang sedang dibaca") + ". " +
-          "Jawab dalam Bahasa Indonesia, singkat dan jelas. Jangan langsung memberi jawaban akhir dari soal — " +
-          "bimbing siswa berpikir langkah demi langkah, ajukan pertanyaan balik bila perlu.",
-        messages,
-      }),
-    });
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents,
+          systemInstruction,
+          generationConfig: { maxOutputTokens: 500 },
+        }),
+      }
+    );
 
     if (!response.ok) {
       const errText = await response.text();
@@ -52,7 +60,7 @@ export default async function handler(req, res) {
     }
 
     const data = await response.json();
-    const text = (data.content || []).map((b) => b.text || "").join("\n").trim();
+    const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("\n").trim();
     res.status(200).json({ reply: text || "Maaf, aku belum bisa menjawab itu. Coba tanya dengan cara lain ya." });
   } catch (e) {
     res.status(500).json({ error: "Terjadi kesalahan menghubungi server AI." });
