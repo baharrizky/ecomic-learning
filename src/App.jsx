@@ -111,6 +111,7 @@ function ComicReader({ url, page, numPages, onLoaded, onPageChange }) {
   useEffect(() => {
     let cancelled = false;
     setLoadError(false);
+    console.log("URL PDF yang dipakai:", JSON.stringify(url));
     pdfjsLib.getDocument(url).promise
       .then((doc) => {
         if (cancelled) return;
