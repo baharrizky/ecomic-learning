@@ -117,7 +117,7 @@ function ComicReader({ url, page, numPages, onLoaded, onPageChange }) {
         setPdfDoc(doc);
         onLoaded(doc.numPages);
       })
-      .catch(() => { if (!cancelled) setLoadError(true); });
+      .catch((err) => { console.error("PDF load error:", err); if (!cancelled) setLoadError(true); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url]);
