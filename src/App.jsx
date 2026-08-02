@@ -112,7 +112,7 @@ function ComicReader({ url, page, numPages, onLoaded, onPageChange }) {
     let cancelled = false;
     setLoadError(false);
     console.log("URL PDF yang dipakai:", JSON.stringify(url));
-    pdfjsLib.getDocument(url).promise
+    pdfjsLib.getDocument({ url }).promise
       .then((doc) => {
         if (cancelled) return;
         setPdfDoc(doc);
