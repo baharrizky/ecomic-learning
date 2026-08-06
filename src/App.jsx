@@ -102,7 +102,7 @@ function overallPctOf(attempts) {
 const toneColor = { good: "var(--teal)", warn: "var(--amber)", bad: "var(--rose)", neutral: "var(--muted)" };
 
 // ---------------- Komponen: Pembaca komik (PDF) ----------------
-function ComicReader({ url, page, numPages, onLoaded, onPageChange }) {
+function ComicReader({ url, page, numPages, onLoaded, onPageChange, externalCanvasRef }) {
   const canvasRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [zoom, setZoom] = useState(1.1);
@@ -111,14 +111,13 @@ function ComicReader({ url, page, numPages, onLoaded, onPageChange }) {
   useEffect(() => {
     let cancelled = false;
     setLoadError(false);
-    console.log("URL PDF yang dipakai:", JSON.stringify(url));
-    pdfjsLib.getDocument({ url }).promise
+    pdfjsLib.getDocument(url).promise
       .then((doc) => {
         if (cancelled) return;
         setPdfDoc(doc);
         onLoaded(doc.numPages);
       })
-      .catch((err) => { console.error("PDF load error:", err); if (!cancelled) setLoadError(true); });
+      .catch(() => { if (!cancelled) setLoadError(true); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url]);
@@ -156,7 +155,7 @@ function ComicReader({ url, page, numPages, onLoaded, onPageChange }) {
       </div>
       <div style={{ overflow: "auto", border: "1px solid var(--line)", borderRadius: 10, textAlign: "center", background: "#e9e9e9", maxHeight: 480 }}>
         {!pdfDoc && <div style={{ padding: 40, color: "var(--muted)" }}><Loader2 size={18} className="spin" /></div>}
-        <canvas ref={canvasRef} style={{ maxWidth: "100%" }} />
+        <canvas ref={(node) => { canvasRef.current = node; if (externalCanvasRef) externalCanvasRef.current = node; }} style={{ maxWidth: "100%" }} />
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10 }}>
         <button className="btn-ghost" disabled={page <= 1} onClick={() => onPageChange(page - 1)}><ArrowLeft size={14} /> Sebelumnya</button>
@@ -167,7 +166,7 @@ function ComicReader({ url, page, numPages, onLoaded, onPageChange }) {
 }
 
 // ---------------- Komponen: AI Tutor (chat) ----------------
-function AiTutor({ context }) {
+function AiTutor({ context, getPageImage }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -185,10 +184,15 @@ function AiTutor({ context }) {
     setInput("");
     setLoading(true);
     try {
+      let image = null;
+      if (getPageImage) {
+        const dataUrl = getPageImage();
+        if (dataUrl && dataUrl.includes(",")) image = dataUrl.split(",")[1];
+      }
       const res = await fetch("/api/tutor", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, context, history: messages }),
+        body: JSON.stringify({ message: text, context, history: messages, image, imageMime: "image/jpeg" }),
       });
       const data = await res.json();
       setMessages((m) => [...m, { role: "ai", text: data.reply || data.error || "Maaf, terjadi kesalahan." }]);
@@ -321,6 +325,7 @@ function ChapterView({ chapter, progress, onBack, onSaveProgress }) {
   const [page, setPage] = useState(progress?.lastPage || 1);
   const [numPages, setNumPages] = useState(progress?.numPages || 0);
   const [tab, setTab] = useState("tutor");
+  const pageCanvasRef = useRef(null);
 
   const finished = numPages > 0 && page >= numPages;
 
@@ -342,7 +347,7 @@ function ChapterView({ chapter, progress, onBack, onSaveProgress }) {
       </div>
       <div style={{ display: "flex", flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 320px", padding: 16 }}>
-          <ComicReader url={chapter.pdf} page={page} numPages={numPages} onLoaded={handleLoaded} onPageChange={handlePageChange} />
+          <ComicReader url={chapter.pdf} page={page} numPages={numPages} onLoaded={handleLoaded} onPageChange={handlePageChange} externalCanvasRef={pageCanvasRef} />
         </div>
         <div style={{ flex: "1 1 300px", borderLeft: "1px solid var(--line)", padding: 16 }}>
           <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
@@ -351,7 +356,12 @@ function ChapterView({ chapter, progress, onBack, onSaveProgress }) {
             <button className={"tabbtn" + (tab === "kuis" ? " active" : "")} onClick={() => setTab("kuis")}><ClipboardList size={13} style={{ verticalAlign: -2 }} /> Kuis</button>
           </div>
 
-          {tab === "tutor" && <AiTutor context={chapter.title + " — " + chapter.desc} />}
+          {tab === "tutor" && (
+            <AiTutor
+              context={chapter.title + " — " + chapter.desc + " (sedang di halaman " + page + " dari " + (numPages || "?") + ")"}
+              getPageImage={() => (pageCanvasRef.current ? pageCanvasRef.current.toDataURL("image/jpeg", 0.7) : null)}
+            />
+          )}
 
           {tab === "tokoh" && (
             <div>
@@ -650,16 +660,16 @@ export default function App() {
 
       {mode === "landing" && (
         <div className="body-area">
-          <div className="card" style={{ textAlign: "center" }}>
-            <div className="brand" style={{ justifyContent: "center", marginBottom: 10 }}><GraduationCap size={22} /> AC-ITS</div>
-            <div className="tag-eyebrow">Adaptive Concept-Based Intelligent Tutoring System</div>
-            <h1 className="disp" style={{ fontSize: 26, margin: "10px 0" }}>Belajar Matematika Lebih Cerdas</h1>
-            <p style={{ color: "var(--muted)", fontSize: 14, maxWidth: 420, margin: "0 auto 20px" }}>
+          <div className="hero-card" style={{ textAlign: "center" }}>
+            <div className="brand" style={{ justifyContent: "center", marginBottom: 10, color: "white" }}><GraduationCap size={22} /> AC-ITS</div>
+            <div style={{ fontSize: 11, letterSpacing: ".06em", textTransform: "uppercase", opacity: 0.85, fontWeight: 700, marginBottom: 6 }}>Adaptive Concept-Based Intelligent Tutoring System</div>
+            <h1 className="disp" style={{ fontSize: 27, margin: "10px 0" }}>Belajar Matematika Lebih Cerdas</h1>
+            <p style={{ opacity: 0.92, fontSize: 14, maxWidth: 420, margin: "0 auto 22px" }}>
               Sistem pembelajaran adaptif materi Eksponensial — lewat komik interaktif, AI Tutor, dan latihan yang menyesuaikan dirimu.
             </p>
             <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-              <button className="btn-primary" onClick={() => { setMode("auth"); setAuthTab("login"); setAuthRole("siswa"); setAuthError(""); }}><User size={15} /> Saya Siswa</button>
-              <button className="btn-ghost" onClick={() => { setMode("auth"); setAuthTab("login"); setAuthRole("guru"); setAuthError(""); }}><Users size={15} /> Saya Guru</button>
+              <button className="btn-primary" style={{ background: "white", color: "var(--brand-dark)", boxShadow: "none" }} onClick={() => { setMode("auth"); setAuthTab("login"); setAuthRole("siswa"); setAuthError(""); }}><User size={15} /> Saya Siswa</button>
+              <button className="btn-ghost" style={{ background: "rgba(255,255,255,0.15)", color: "white", borderColor: "rgba(255,255,255,0.4)" }} onClick={() => { setMode("auth"); setAuthTab("login"); setAuthRole("guru"); setAuthError(""); }}><Users size={15} /> Saya Guru</button>
             </div>
           </div>
         </div>
@@ -714,11 +724,11 @@ export default function App() {
         <>
           <div className="topbar">
             <div className="brand"><GraduationCap size={20} /> AC-ITS</div>
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <span className="pill" style={{ background: "var(--brand-light)", color: "var(--brand)" }}>
+            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+              <span className="pill" style={{ background: "var(--brand-light)", color: "var(--brand-dark)" }}>
                 {profile.role === "siswa" ? <><User size={12} style={{ verticalAlign: -1 }} /> Siswa</> : <><Users size={12} style={{ verticalAlign: -1 }} /> Guru</>}
-                {profile.name && ` · ${profile.name}`}
               </span>
+              <div className="avatar">{(profile.name || "?").trim().charAt(0).toUpperCase()}</div>
               <button className="btn-ghost" onClick={logout}><LogOut size={14} /> Keluar</button>
             </div>
           </div>
@@ -731,18 +741,31 @@ export default function App() {
                 )}
 
                 {progressLoaded && screen === "dashboard" && (
-                  <div className="card">
-                    <div className="tag-eyebrow">Dashboard Siswa</div>
-                    <h2 className="disp" style={{ fontSize: 19 }}>Halo, {profile.name || "Siswa"} 👋</h2>
-                    <p style={{ color: "var(--muted)", fontSize: 13.5, marginBottom: 14 }}>Semangat belajar hari ini.</p>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>Progress latihan konsep</div>
-                    <div className="bar-track"><div className="bar-fill" style={{ width: overallPct + "%", background: "var(--brand)" }} /></div>
-                    <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4, marginBottom: 18 }}>{overallPct}%</div>
-                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      <button className="btn-primary" onClick={() => setScreen("komikList")}><Sparkles size={15} /> Baca Komik</button>
-                      <button className="btn-ghost" onClick={goStudy}>Latihan Konsep <ArrowRight size={15} /></button>
+                  <>
+                    <div className="hero-card" style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 12, opacity: 0.85, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase" }}>Halo, {profile.name || "Siswa"} 👋</div>
+                      <h2 className="disp" style={{ fontSize: 22, margin: "6px 0 4px" }}>Semangat belajar hari ini!</h2>
+                      <p style={{ opacity: 0.9, fontSize: 13, marginBottom: 16 }}>Progress latihan konsep kamu sejauh ini</p>
+                      <div className="bar-track"><div className="bar-fill" style={{ width: overallPct + "%" }} /></div>
+                      <div style={{ fontSize: 12, opacity: 0.9, marginTop: 6, marginBottom: 18, fontWeight: 700 }}>{overallPct}% selesai</div>
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        <button className="btn-primary" style={{ background: "white", color: "var(--brand-dark)", boxShadow: "none" }} onClick={() => setScreen("komikList")}><Sparkles size={15} /> Baca Komik</button>
+                        <button className="btn-ghost" style={{ background: "rgba(255,255,255,0.15)", color: "white", borderColor: "rgba(255,255,255,0.4)" }} onClick={goStudy}>Latihan Konsep <ArrowRight size={15} /></button>
+                      </div>
                     </div>
-                  </div>
+                    <div className="card">
+                      <div className="tag-eyebrow">Progress per konsep</div>
+                      {CONCEPT_ORDER.map((c) => {
+                        const st = statuses[c]; const m = computeMastery(attempts[c]);
+                        return (
+                          <div key={c} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid var(--line)", fontSize: 13.5 }}>
+                            <span style={{ fontWeight: 600 }}>{CONCEPTS[c].name}</span>
+                            <span className="pill" style={{ background: toneColor[st.tone] + "22", color: toneColor[st.tone] }}>{st.label}{m !== null && ` · ${Math.round(m * 100)}%`}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
                 )}
 
                 {progressLoaded && screen === "komikList" && (
@@ -754,11 +777,16 @@ export default function App() {
                       const pct = p && p.numPages ? Math.round((p.lastPage / p.numPages) * 100) : 0;
                       return (
                         <button key={c.id} onClick={() => { setActiveChapterId(c.id); setScreen("komikChapter"); }}
-                          style={{ display: "block", width: "100%", textAlign: "left", padding: 14, borderRadius: 10, border: "1px solid var(--line)", marginBottom: 10, background: "white" }}>
-                          <div style={{ fontWeight: 600, fontSize: 14.5 }}>{c.title}</div>
-                          <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 6 }}>{c.desc}</div>
-                          <div className="bar-track"><div className="bar-fill" style={{ width: pct + "%", background: p?.finished ? "var(--teal)" : "var(--brand)" }} /></div>
-                          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>{p?.finished ? "Selesai dibaca" : pct > 0 ? `${pct}% dibaca` : "Belum dibaca"}</div>
+                          style={{ display: "flex", gap: 14, width: "100%", textAlign: "left", padding: 16, borderRadius: 16, border: "1.5px solid var(--line)", marginBottom: 12, background: "white" }}>
+                          <div style={{ width: 44, height: 44, borderRadius: 14, background: "var(--brand-light)", color: "var(--brand-dark)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                            <Sparkles size={20} />
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 700, fontSize: 14.5 }}>{c.title}</div>
+                            <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 8 }}>{c.desc}</div>
+                            <div className="bar-track"><div className="bar-fill" style={{ width: pct + "%", background: p?.finished ? "var(--teal)" : undefined }} /></div>
+                            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, fontWeight: 600 }}>{p?.finished ? "✓ Selesai dibaca" : pct > 0 ? `${pct}% dibaca` : "Belum dibaca"}</div>
+                          </div>
                         </button>
                       );
                     })}
@@ -858,12 +886,17 @@ export default function App() {
                 )}
 
                 {progressLoaded && screen === "profil" && (
-                  <div className="card">
-                    <div className="tag-eyebrow">Profil</div>
+                  <div className="card" style={{ textAlign: "center" }}>
+                    <div className="avatar avatar-lg" style={{ margin: "0 auto 14px" }}>{(profile.name || "?").trim().charAt(0).toUpperCase()}</div>
                     <h2 className="disp" style={{ fontSize: 19 }}>{profile.name || "Siswa"}</h2>
-                    <p style={{ color: "var(--muted)", fontSize: 13.5 }}>{profile.kelas} · {profile.sekolah}</p>
-                    <p style={{ color: "var(--muted)", fontSize: 13.5 }}>Progress latihan konsep: {overallPct}%</p>
-                    <button className="btn-ghost" onClick={logout} style={{ marginTop: 10 }}><LogOut size={14} /> Keluar</button>
+                    <div style={{ display: "flex", gap: 8, justifyContent: "center", margin: "8px 0 14px", flexWrap: "wrap" }}>
+                      {profile.kelas && <span className="pill" style={{ background: "var(--brand-light)", color: "var(--brand-dark)" }}>Kelas {profile.kelas}</span>}
+                      {profile.sekolah && <span className="pill" style={{ background: "var(--paper-2)", color: "var(--muted)" }}>{profile.sekolah}</span>}
+                    </div>
+                    <div className="stat-chip" style={{ justifyContent: "center", margin: "0 auto 16px", maxWidth: 220 }}>
+                      <TrendingUp size={15} style={{ color: "var(--brand)" }} /> Progress: {overallPct}%
+                    </div>
+                    <button className="btn-ghost" onClick={logout}><LogOut size={14} /> Keluar</button>
                   </div>
                 )}
               </div>
@@ -959,49 +992,55 @@ export default function App() {
 function GlobalStyle() {
   return (
     <>
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" />
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" />
       <style>{`
         :root {
-          --paper:#F3F6F1; --paper-2:#EAEFE6; --ink:#1F2A24; --muted:#6B7A70;
-          --teal:#2F6F5E; --teal-light:#D7E8E1; --amber:#C97A2B; --amber-light:#F5E3CE;
-          --plum:#6B4E71; --plum-light:#E8DEEA; --rose:#B5495B; --rose-light:#F3DEE1;
-          --line:#D8DED4; --brand:#44519C; --brand-light:#E3E6F4;
+          --paper:#F6F5FC; --paper-2:#EFEDFB; --ink:#1E1B33; --muted:#7A768E;
+          --teal:#1FAE7F; --teal-light:#DDF6EC; --amber:#F5A524; --amber-light:#FEF1DA;
+          --plum:#8B5CF6; --plum-light:#EDE6FE; --rose:#F0466E; --rose-light:#FDE3EA;
+          --line:#E6E3F5; --brand:#7C5CFC; --brand-light:#EEE9FF; --brand-dark:#6238E0;
         }
-        .wrap { font-family:'Inter',sans-serif; background:var(--paper); color:var(--ink); border-radius:16px; padding:0; min-height:100%; overflow:hidden; }
-        .disp { font-family:'Fraunces',serif; }
+        .wrap { font-family:'Inter',sans-serif; background:var(--paper); color:var(--ink); border-radius:20px; padding:0; min-height:100%; overflow:hidden; }
+        .disp { font-family:'Baloo 2',sans-serif; font-weight:700; }
         .mono { font-family:'IBM Plex Mono',monospace; }
         button { font-family:'Inter'; cursor:pointer; }
-        .btn-primary { background:var(--brand); color:white; border:none; padding:11px 20px; border-radius:8px; font-weight:500; font-size:14px; display:inline-flex; align-items:center; gap:6px; }
-        .btn-primary:disabled { opacity:0.35; cursor:not-allowed; }
-        .btn-ghost { background:transparent; border:1px solid var(--line); color:var(--ink); padding:9px 16px; border-radius:8px; font-size:13.5px; display:inline-flex; align-items:center; gap:6px; }
-        input[type=text],input[type=password],input[type=email] { width:100%; padding:11px 13px; border-radius:8px; border:1px solid var(--line); font-size:14px; box-sizing:border-box; }
-        textarea { font-family:'Inter'; }
-        .card { background:white; border:1px solid var(--line); border-radius:14px; padding:22px; }
-        .pill { font-size:11.5px; padding:3px 10px; border-radius:999px; font-weight:600; }
-        .opt { display:block; width:100%; text-align:left; padding:12px 14px; border-radius:9px; border:1px solid var(--line); background:var(--paper-2); margin-bottom:9px; font-size:14.5px; font-family:'IBM Plex Mono'; }
+        .btn-primary { background:linear-gradient(135deg,var(--brand),var(--brand-dark)); color:white; border:none; padding:11px 20px; border-radius:12px; font-weight:600; font-size:14px; display:inline-flex; align-items:center; gap:6px; box-shadow:0 4px 14px rgba(124,92,252,0.35); }
+        .btn-primary:disabled { opacity:0.35; cursor:not-allowed; box-shadow:none; }
+        .btn-ghost { background:white; border:1px solid var(--line); color:var(--ink); padding:9px 16px; border-radius:12px; font-size:13.5px; display:inline-flex; align-items:center; gap:6px; }
+        input[type=text],input[type=password],input[type=email] { width:100%; padding:11px 13px; border-radius:12px; border:1.5px solid var(--line); font-size:14px; box-sizing:border-box; background:white; }
+        textarea { font-family:'Inter'; border-radius:12px; }
+        .card { background:white; border:1px solid var(--line); border-radius:18px; padding:22px; box-shadow:0 2px 10px rgba(90,70,190,0.05); }
+        .hero-card { background:linear-gradient(135deg,var(--brand) 0%,#A78BFA 55%,#F472B6 130%); color:white; border-radius:20px; padding:24px; box-shadow:0 10px 30px rgba(124,92,252,0.35); }
+        .hero-card .bar-track { background:rgba(255,255,255,0.3); }
+        .hero-card .bar-fill { background:white; }
+        .avatar { width:40px; height:40px; border-radius:50%; background:linear-gradient(135deg,var(--brand),#F472B6); color:white; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:15px; font-family:'Baloo 2',sans-serif; flex-shrink:0; }
+        .avatar-lg { width:76px; height:76px; font-size:26px; }
+        .pill { font-size:11.5px; padding:4px 11px; border-radius:999px; font-weight:700; }
+        .stat-chip { background:white; border:1px solid var(--line); border-radius:14px; padding:10px 14px; display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; }
+        .opt { display:block; width:100%; text-align:left; padding:13px 14px; border-radius:12px; border:1.5px solid var(--line); background:var(--paper-2); margin-bottom:9px; font-size:14.5px; font-family:'IBM Plex Mono'; transition:border-color .15s; }
         .opt.picked { border-color:var(--brand); background:var(--brand-light); }
         .qtext { font-family:'IBM Plex Mono'; font-size:22px; margin:14px 0 20px; }
-        .bar-track { background:var(--paper-2); border-radius:999px; height:8px; overflow:hidden; margin-top:6px; }
-        .bar-fill { height:100%; border-radius:999px; }
-        .tag-eyebrow { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; }
-        .hint-box { display:flex; gap:10px; padding:14px; border-radius:10px; margin:14px 0; font-size:13.5px; line-height:1.5; }
+        .bar-track { background:var(--paper-2); border-radius:999px; height:9px; overflow:hidden; margin-top:6px; }
+        .bar-fill { height:100%; border-radius:999px; background:linear-gradient(90deg,var(--brand),#C084FC); }
+        .tag-eyebrow { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; font-weight:700; }
+        .hint-box { display:flex; gap:10px; padding:14px; border-radius:14px; margin:14px 0; font-size:13.5px; line-height:1.5; }
         .hint-t1 { background:var(--plum-light); color:var(--plum); }
-        .hint-t2 { background:var(--amber-light); color:var(--amber); }
+        .hint-t2 { background:var(--amber-light); color:#9A6414; }
         .hint-t3 { background:var(--rose-light); color:var(--rose); }
-        .ok-box { background:var(--teal-light); color:var(--teal); padding:14px; border-radius:10px; margin:14px 0; font-size:13.5px; display:flex; gap:10px; align-items:center; }
-        .err-box { background:var(--rose-light); color:var(--rose); padding:11px 14px; border-radius:9px; margin-bottom:14px; font-size:13px; }
+        .ok-box { background:var(--teal-light); color:#0F7A56; padding:14px; border-radius:14px; margin:14px 0; font-size:13.5px; display:flex; gap:10px; align-items:center; font-weight:600; }
+        .err-box { background:var(--rose-light); color:var(--rose); padding:11px 14px; border-radius:12px; margin-bottom:14px; font-size:13px; font-weight:600; }
         .topbar { display:flex; align-items:center; justify-content:space-between; padding:14px 22px; border-bottom:1px solid var(--line); background:white; }
-        .brand { display:flex; align-items:center; gap:8px; font-weight:700; color:var(--brand); font-size:16px; }
-        .body-area { padding:22px; }
-        .bottomnav { display:flex; border-top:1px solid var(--line); background:white; }
-        .navbtn { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; padding:10px 0; font-size:11px; color:var(--muted); background:none; border:none; }
-        .navbtn.active { color:var(--brand); font-weight:600; }
+        .brand { display:flex; align-items:center; gap:8px; font-weight:700; color:var(--brand-dark); font-size:17px; font-family:'Baloo 2',sans-serif; }
+        .body-area { padding:20px; }
+        .bottomnav { display:flex; gap:4px; padding:10px 12px; background:white; border-top:1px solid var(--line); }
+        .navbtn { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; padding:8px 0; font-size:10.5px; color:var(--muted); background:none; border:none; border-radius:12px; font-weight:600; }
+        .navbtn.active { color:var(--brand-dark); background:var(--brand-light); }
         table { width:100%; border-collapse:collapse; font-size:13px; }
-        th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }
-        th { color:var(--muted); font-weight:500; font-size:11.5px; text-transform:uppercase; letter-spacing:.03em; }
-        .tabbtn { padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:white; font-size:13px; margin-right:8px; margin-bottom:6px; }
+        th,td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); }
+        th { color:var(--muted); font-weight:700; font-size:11.5px; text-transform:uppercase; letter-spacing:.03em; }
+        .tabbtn { padding:8px 14px; border-radius:12px; border:1.5px solid var(--line); background:white; font-size:13px; margin-right:8px; margin-bottom:6px; font-weight:600; color:var(--ink); }
         .tabbtn.active { background:var(--brand); color:white; border-color:var(--brand); }
-        .misc-item { font-size:12.5px; color:var(--amber); background:var(--amber-light); padding:6px 10px; border-radius:7px; margin-top:6px; }
+        .misc-item { font-size:12.5px; color:#9A6414; background:var(--amber-light); padding:7px 11px; border-radius:10px; margin-top:6px; font-weight:600; }
         .inputwrap { position:relative; }
         .inputwrap svg { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--muted); }
         .inputwrap input { padding-left:36px; }
