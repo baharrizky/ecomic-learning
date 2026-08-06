@@ -3,7 +3,7 @@ import {
   GraduationCap, LayoutDashboard, BookOpen, PenLine, TrendingUp, User,
   Lightbulb, CheckCircle2, AlertTriangle, ArrowRight, ArrowLeft, LogOut, Database, Users,
   Mail, Lock, Loader2, RefreshCw, MessageCircle, Sparkles, ClipboardList, Lock as LockIcon,
-  ZoomIn, ZoomOut, Send, Clock,
+  ZoomIn, ZoomOut, Send, Clock, Trophy, Award,
 } from "lucide-react";
 import { auth, db } from "./firebase";
 import {
@@ -100,6 +100,38 @@ function overallPctOf(attempts) {
   return Math.round((tested.reduce((a, b) => a + b, 0) / CONCEPT_ORDER.length) * 100);
 }
 const toneColor = { good: "var(--teal)", warn: "var(--amber)", bad: "var(--rose)", neutral: "var(--muted)" };
+
+// ---------------- Gamifikasi: XP, Level, Badge (dihitung otomatis dari data yang ada) ----------------
+function computeXp(attempts, comicProgress) {
+  let xp = 0;
+  CONCEPT_ORDER.forEach((c) => {
+    (attempts[c] || []).forEach((score) => { xp += Math.round(score * 10); });
+  });
+  Object.values(comicProgress || {}).forEach((p) => { if (p?.finished) xp += 50; });
+  return xp;
+}
+function computeLevel(xp) {
+  const perLevel = 200;
+  const level = Math.floor(xp / perLevel) + 1;
+  const xpInLevel = xp % perLevel;
+  return { level, xpInLevel, xpTarget: perLevel };
+}
+const BADGES = [
+  { id: "first_chapter", nama: "Pembaca Pertama", desc: "Selesai membaca 1 chapter komik", icon: "📖", check: (s) => s.chaptersFinished >= 1 },
+  { id: "all_chapters", nama: "Pembaca Rajin", desc: "Selesai membaca semua chapter komik", icon: "🔥", check: (s) => s.chaptersFinished >= s.totalChapters && s.totalChapters > 0 },
+  { id: "first_correct", nama: "Langkah Pertama", desc: "Menjawab 1 soal latihan dengan benar", icon: "✅", check: (s) => s.correctCount >= 1 },
+  { id: "ten_correct", nama: "Latihan 10", desc: "Menjawab 10 soal latihan dengan benar", icon: "🎯", check: (s) => s.correctCount >= 10 },
+  { id: "one_mastered", nama: "Penakluk Konsep", desc: "Menguasai 1 konsep eksponen", icon: "⭐", check: (s) => s.masteredCount >= 1 },
+  { id: "all_mastered", nama: "Master Eksponen", desc: "Menguasai semua konsep eksponen", icon: "🏆", check: (s) => s.masteredCount >= CONCEPT_ORDER.length },
+  { id: "streak_3", nama: "Streak 3 Hari", desc: "Belajar 3 hari berturut-turut", icon: "🔥", check: (s) => s.streak >= 3 },
+  { id: "streak_7", nama: "Streak 7 Hari", desc: "Belajar 7 hari berturut-turut", icon: "💪", check: (s) => s.streak >= 7 },
+];
+function computeBadgeStats(attempts, comicProgress, statuses, streak) {
+  const chaptersFinished = Object.values(comicProgress || {}).filter((p) => p?.finished).length;
+  const correctCount = CONCEPT_ORDER.reduce((sum, c) => sum + (attempts[c] || []).filter((s) => s >= 0.4).length, 0);
+  const masteredCount = CONCEPT_ORDER.filter((c) => statuses[c]?.label === "Dikuasai").length;
+  return { chaptersFinished, totalChapters: CHAPTERS.length, correctCount, masteredCount, streak: streak || 0 };
+}
 
 // ---------------- Komponen: Pembaca komik (PDF) ----------------
 function ComicReader({ url, page, numPages, onLoaded, onPageChange, externalCanvasRef }) {
@@ -407,6 +439,12 @@ export default function App() {
   const [misconceptions, setMisconceptions] = useState([]);
   const [poolIndex, setPoolIndex] = useState(EMPTY_POOLIDX);
   const [comicProgress, setComicProgress] = useState({}); // { [chapterId]: { lastPage, numPages, finished } }
+  const [streak, setStreak] = useState(0);
+  const [lastActiveDate, setLastActiveDate] = useState(null);
+  const streakCheckedRef = useRef(false);
+  const [leaderboardStudents, setLeaderboardStudents] = useState([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // ---------- Navigasi ----------
   const [screen, setScreen] = useState("dashboard"); // dashboard | materi | latihan | diagnosis | hint | progress | profil | komikList | komikChapter
@@ -453,12 +491,30 @@ export default function App() {
     async function loadProgress() {
       if (!authUser || !profile || profile.role !== "siswa") return;
       const snap = await getDoc(doc(db, "progress", authUser.uid));
+      let loadedStreak = 0;
+      let loadedLastActive = null;
       if (snap.exists()) {
         const d = snap.data();
         setAttempts(d.attempts || EMPTY_ATTEMPTS);
         setMisconceptions(d.misconceptions || []);
         setPoolIndex(d.poolIndex || EMPTY_POOLIDX);
         setComicProgress(d.comicProgress || {});
+        loadedStreak = d.streak || 0;
+        loadedLastActive = d.lastActiveDate || null;
+      }
+      // Hitung streak harian: lanjut kalau aktif kemarin, reset kalau lewat 1 hari, tetap kalau sudah aktif hari ini
+      if (!streakCheckedRef.current) {
+        streakCheckedRef.current = true;
+        const today = new Date().toISOString().slice(0, 10);
+        if (loadedLastActive === today) {
+          loadedStreak = loadedStreak || 1;
+        } else {
+          const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+          loadedStreak = loadedLastActive === yesterday ? (loadedStreak || 0) + 1 : 1;
+          loadedLastActive = today;
+        }
+        setStreak(loadedStreak);
+        setLastActiveDate(loadedLastActive);
       }
       setProgressLoaded(true);
     }
@@ -467,8 +523,8 @@ export default function App() {
 
   useEffect(() => {
     if (!authUser || !profile || profile.role !== "siswa" || !progressLoaded) return;
-    setDoc(doc(db, "progress", authUser.uid), { attempts, misconceptions, poolIndex, comicProgress }, { merge: true }).catch(() => {});
-  }, [attempts, misconceptions, poolIndex, comicProgress, authUser, profile, progressLoaded]);
+    setDoc(doc(db, "progress", authUser.uid), { attempts, misconceptions, poolIndex, comicProgress, streak, lastActiveDate }, { merge: true }).catch(() => {});
+  }, [attempts, misconceptions, poolIndex, comicProgress, streak, lastActiveDate, authUser, profile, progressLoaded]);
 
   const statuses = useMemo(() => {
     const s = {};
@@ -557,6 +613,28 @@ export default function App() {
   }
 
   const overallPct = useMemo(() => overallPctOf(attempts), [attempts]);
+  const xp = useMemo(() => computeXp(attempts, comicProgress), [attempts, comicProgress]);
+  const { level, xpInLevel, xpTarget } = useMemo(() => computeLevel(xp), [xp]);
+  const badgeStats = useMemo(() => computeBadgeStats(attempts, comicProgress, statuses, streak), [attempts, comicProgress, statuses, streak]);
+  const earnedBadges = useMemo(() => BADGES.filter((b) => b.check(badgeStats)), [badgeStats]);
+
+  async function loadLeaderboard() {
+    setLeaderboardLoading(true);
+    try {
+      const usersSnap = await getDocs(query(collection(db, "users"), where("role", "==", "siswa")));
+      const list = [];
+      for (const uDoc of usersSnap.docs) {
+        const u = uDoc.data();
+        const progSnap = await getDoc(doc(db, "progress", uDoc.id));
+        const prog = progSnap.exists() ? progSnap.data() : {};
+        const sXp = computeXp(prog.attempts || EMPTY_ATTEMPTS, prog.comicProgress || {});
+        list.push({ uid: uDoc.id, name: u.name || "Siswa", xp: sXp, streak: prog.streak || 0, level: computeLevel(sXp).level });
+      }
+      list.sort((a, b) => b.xp - a.xp);
+      setLeaderboardStudents(list);
+    } catch (e) {}
+    setLeaderboardLoading(false);
+  }
 
   async function submitAuth() {
     setAuthError("");
@@ -617,6 +695,11 @@ export default function App() {
     if (mode === "app" && profile?.role === "guru") loadGuruData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, profile]);
+
+  useEffect(() => {
+    if (mode === "app" && profile?.role === "siswa" && screen === "leaderboard") loadLeaderboard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, profile, screen]);
 
   const guruAvgPct = useMemo(() => {
     if (guruStudents.length === 0) return 0;
@@ -721,23 +804,53 @@ export default function App() {
       )}
 
       {mode === "app" && profile && (
-        <>
-          <div className="topbar">
-            <div className="brand"><GraduationCap size={20} /> AC-ITS</div>
-            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              <span className="pill" style={{ background: "var(--brand-light)", color: "var(--brand-dark)" }}>
-                {profile.role === "siswa" ? <><User size={12} style={{ verticalAlign: -1 }} /> Siswa</> : <><Users size={12} style={{ verticalAlign: -1 }} /> Guru</>}
-              </span>
-              <div className="avatar">{(profile.name || "?").trim().charAt(0).toUpperCase()}</div>
-              <button className="btn-ghost" onClick={logout}><LogOut size={14} /> Keluar</button>
-            </div>
-          </div>
+        <div className="app-shell">
+          <aside className="sidebar">
+            <div className="sidebar-brand brand"><GraduationCap size={20} /> AC-ITS</div>
 
-          {profile.role === "siswa" && (
-            <>
+            {profile.role === "siswa" && (
+              <nav className="sidebar-nav">
+                <button className={"sidebar-navbtn" + (screen === "dashboard" ? " active" : "")} onClick={() => setScreen("dashboard")}><LayoutDashboard size={17} />Dashboard</button>
+                <button className={"sidebar-navbtn" + (screen === "komikList" || screen === "komikChapter" ? " active" : "")} onClick={() => setScreen("komikList")}><Sparkles size={17} />Komik</button>
+                <button className={"sidebar-navbtn" + (screen === "latihan" || screen === "diagnosis" || screen === "hint" || screen === "materi" ? " active" : "")} onClick={() => setScreen("latihan")}><PenLine size={17} />Latihan</button>
+                <button className={"sidebar-navbtn" + (screen === "progress" ? " active" : "")} onClick={() => setScreen("progress")}><TrendingUp size={17} />Progress</button>
+                <button className={"sidebar-navbtn" + (screen === "leaderboard" ? " active" : "")} onClick={() => setScreen("leaderboard")}><Trophy size={17} />Peringkat</button>
+                <button className={"sidebar-navbtn" + (screen === "badges" ? " active" : "")} onClick={() => setScreen("badges")}><Award size={17} />Koleksi Badge</button>
+                <button className={"sidebar-navbtn" + (screen === "profil" ? " active" : "")} onClick={() => setScreen("profil")}><User size={17} />Profil</button>
+              </nav>
+            )}
+
+            {profile.role === "guru" && (
+              <nav className="sidebar-nav">
+                <button className={"sidebar-navbtn" + (guruTab === "beranda" ? " active" : "")} onClick={() => setGuruTab("beranda")}><LayoutDashboard size={17} />Beranda</button>
+                <button className={"sidebar-navbtn" + (guruTab === "analitik" ? " active" : "")} onClick={() => setGuruTab("analitik")}><TrendingUp size={17} />Analitik</button>
+                <button className={"sidebar-navbtn" + (guruTab === "materi" ? " active" : "")} onClick={() => setGuruTab("materi")}><Database size={17} />Knowledge Base</button>
+              </nav>
+            )}
+
+            <div className="sidebar-profile-card">
+              <div className="avatar">{(profile.name || "?").trim().charAt(0).toUpperCase()}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{profile.name || "Pengguna"}</div>
+                <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{profile.role === "siswa" ? "Siswa" : "Guru"}</div>
+              </div>
+              <button className="btn-ghost" style={{ padding: 7 }} onClick={logout} title="Keluar"><LogOut size={13} /></button>
+            </div>
+          </aside>
+
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+            {profile.role === "siswa" && (
               <div className="body-area">
                 {!progressLoaded && (
                   <div className="card" style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--muted)" }}><Loader2 size={16} className="spin" /> Memuat progress belajarmu...</div>
+                )}
+
+                {progressLoaded && screen !== "komikChapter" && (
+                  <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+                    <span className="streak-chip">🔥 Streak {streak} hari</span>
+                    <span className="xp-chip">⭐ Level {level} · {xpInLevel}/{xpTarget} XP</span>
+                    <span className="pill" style={{ background: "var(--teal-light)", color: "#0F7A56" }}>🏅 {earnedBadges.length}/{BADGES.length} Badge</span>
+                  </div>
                 )}
 
                 {progressLoaded && screen === "dashboard" && (
@@ -885,6 +998,44 @@ export default function App() {
                   </div>
                 )}
 
+                {progressLoaded && screen === "leaderboard" && (
+                  <div className="card">
+                    <div className="tag-eyebrow">Peringkat Siswa</div>
+                    <h2 className="disp" style={{ fontSize: 19, marginBottom: 14 }}>Papan Peringkat</h2>
+                    {leaderboardLoading && <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--muted)", fontSize: 13.5 }}><Loader2 size={15} className="spin" /> Memuat peringkat...</div>}
+                    {!leaderboardLoading && leaderboardStudents.length === 0 && <p style={{ color: "var(--muted)", fontSize: 13.5 }}>Belum ada data siswa lain.</p>}
+                    {!leaderboardLoading && leaderboardStudents.map((s, i) => (
+                      <div key={s.uid} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 8px", borderBottom: "1px solid var(--line)", background: s.uid === authUser?.uid ? "var(--brand-light)" : "transparent", borderRadius: 10 }}>
+                        <div style={{ width: 26, textAlign: "center", fontWeight: 700, color: i < 3 ? "var(--amber)" : "var(--muted)" }}>{i + 1}</div>
+                        <div className="avatar" style={{ width: 32, height: 32, fontSize: 12 }}>{s.name.trim().charAt(0).toUpperCase()}</div>
+                        <div style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>{s.name}{s.uid === authUser?.uid && " (Kamu)"}</div>
+                        <span className="streak-chip">🔥 {s.streak}</span>
+                        <span className="xp-chip">⭐ {s.xp} XP</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {progressLoaded && screen === "badges" && (
+                  <div className="card">
+                    <div className="tag-eyebrow">Koleksi Badge</div>
+                    <h2 className="disp" style={{ fontSize: 19, marginBottom: 4 }}>{earnedBadges.length} dari {BADGES.length} badge terkumpul</h2>
+                    <p style={{ color: "var(--muted)", fontSize: 13, marginBottom: 16 }}>Kumpulkan badge dengan aktif belajar dan membaca komik.</p>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 12 }}>
+                      {BADGES.map((b) => {
+                        const earned = b.check(badgeStats);
+                        return (
+                          <div key={b.id} className={"badge-card " + (earned ? "earned" : "locked")}>
+                            <div style={{ fontSize: 30, marginBottom: 6 }}>{b.icon}</div>
+                            <div style={{ fontWeight: 700, fontSize: 12.5 }}>{b.nama}</div>
+                            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>{b.desc}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {progressLoaded && screen === "profil" && (
                   <div className="card" style={{ textAlign: "center" }}>
                     <div className="avatar avatar-lg" style={{ margin: "0 auto 14px" }}>{(profile.name || "?").trim().charAt(0).toUpperCase()}</div>
@@ -893,6 +1044,11 @@ export default function App() {
                       {profile.kelas && <span className="pill" style={{ background: "var(--brand-light)", color: "var(--brand-dark)" }}>Kelas {profile.kelas}</span>}
                       {profile.sekolah && <span className="pill" style={{ background: "var(--paper-2)", color: "var(--muted)" }}>{profile.sekolah}</span>}
                     </div>
+                    <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 16, flexWrap: "wrap" }}>
+                      <span className="streak-chip">🔥 Streak {streak} hari</span>
+                      <span className="xp-chip">⭐ Level {level}</span>
+                      <span className="pill" style={{ background: "var(--teal-light)", color: "#0F7A56" }}>🏅 {earnedBadges.length} Badge</span>
+                    </div>
                     <div className="stat-chip" style={{ justifyContent: "center", margin: "0 auto 16px", maxWidth: 220 }}>
                       <TrendingUp size={15} style={{ color: "var(--brand)" }} /> Progress: {overallPct}%
                     </div>
@@ -900,90 +1056,77 @@ export default function App() {
                   </div>
                 )}
               </div>
+            )}
 
-              <div className="bottomnav">
-                <button className={"navbtn" + (screen === "dashboard" ? " active" : "")} onClick={() => setScreen("dashboard")}><LayoutDashboard size={18} />Dashboard</button>
-                <button className={"navbtn" + (screen === "komikList" || screen === "komikChapter" ? " active" : "")} onClick={() => setScreen("komikList")}><Sparkles size={18} />Komik</button>
-                <button className={"navbtn" + (screen === "latihan" || screen === "diagnosis" || screen === "hint" || screen === "materi" ? " active" : "")} onClick={() => setScreen("latihan")}><PenLine size={18} />Latihan</button>
-                <button className={"navbtn" + (screen === "progress" ? " active" : "")} onClick={() => setScreen("progress")}><TrendingUp size={18} />Progress</button>
-                <button className={"navbtn" + (screen === "profil" ? " active" : "")} onClick={() => setScreen("profil")}><User size={18} />Profil</button>
-              </div>
-            </>
-          )}
-
-          {profile.role === "guru" && (
-            <div className="body-area">
-              <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-                <div>
-                  <button className={"tabbtn" + (guruTab === "beranda" ? " active" : "")} onClick={() => setGuruTab("beranda")}><Users size={13} style={{ verticalAlign: -2 }} /> Beranda</button>
-                  <button className={"tabbtn" + (guruTab === "analitik" ? " active" : "")} onClick={() => setGuruTab("analitik")}><TrendingUp size={13} style={{ verticalAlign: -2 }} /> Analitik</button>
-                  <button className={"tabbtn" + (guruTab === "materi" ? " active" : "")} onClick={() => setGuruTab("materi")}><Database size={13} style={{ verticalAlign: -2 }} /> Materi (Knowledge Base)</button>
+            {profile.role === "guru" && (
+              <div className="body-area">
+                <div style={{ marginBottom: 16, display: "flex", justifyContent: "flex-end" }}>
+                  <button className="btn-ghost" onClick={loadGuruData} disabled={guruLoading}>{guruLoading ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} Muat ulang data</button>
                 </div>
-                <button className="btn-ghost" onClick={loadGuruData} disabled={guruLoading}>{guruLoading ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} Muat ulang data</button>
-              </div>
 
-              {guruTab === "beranda" && (
-                <div className="card">
-                  <div className="tag-eyebrow">Dashboard Guru — data siswa dari database</div>
-                  <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 10, marginBottom: 18 }}>
-                    <div className="card" style={{ flex: 1, minWidth: 140 }}><div style={{ fontSize: 11, color: "var(--muted)" }}>Total siswa</div><div className="disp" style={{ fontSize: 22 }}>{guruStudents.length}</div></div>
-                    <div className="card" style={{ flex: 1, minWidth: 140 }}><div style={{ fontSize: 11, color: "var(--muted)" }}>Rata-rata penguasaan</div><div className="disp" style={{ fontSize: 22 }}>{guruAvgPct}%</div></div>
-                    <div className="card" style={{ flex: 1, minWidth: 140 }}><div style={{ fontSize: 11, color: "var(--muted)" }}>Konsep tersulit</div><div className="disp" style={{ fontSize: 16 }}>{guruHardestConcept}</div></div>
-                  </div>
-                  {guruStudents.length === 0 && !guruLoading && <p style={{ fontSize: 13.5, color: "var(--muted)" }}>Belum ada siswa yang terdaftar, atau belum ada aktivitas belajar.</p>}
-                  {CONCEPT_ORDER.map((c) => {
-                    const m = guruConceptMastery(c); const pct = m ? Math.round(m * 100) : 0;
-                    const st = m === null ? { tone: "neutral" } : (pct >= 75 ? { tone: "good" } : pct >= 40 ? { tone: "warn" } : { tone: "bad" });
-                    return (
-                      <div key={c} style={{ marginBottom: 12 }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}><span>{CONCEPTS[c].name}</span><span>{m !== null ? pct + "%" : "–"}</span></div>
-                        <div className="bar-track"><div className="bar-fill" style={{ width: pct + "%", background: toneColor[st.tone] }} /></div>
-                      </div>
-                    );
-                  })}
-                  {guruStudents.length > 0 && (
-                    <div style={{ marginTop: 20 }}>
-                      <div className="tag-eyebrow">Daftar siswa</div>
-                      <table>
-                        <thead><tr><th>Nama</th><th>Kelas</th><th>Sekolah</th><th>Progress</th></tr></thead>
-                        <tbody>{guruStudents.map((s) => (<tr key={s.uid}><td>{s.name}</td><td>{s.kelas || "-"}</td><td>{s.sekolah || "-"}</td><td>{overallPctOf(s.attempts)}%</td></tr>))}</tbody>
-                      </table>
+                {guruTab === "beranda" && (
+                  <div className="card">
+                    <div className="tag-eyebrow">Dashboard Guru — data siswa dari database</div>
+                    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 10, marginBottom: 18 }}>
+                      <div className="card" style={{ flex: 1, minWidth: 140 }}><div style={{ fontSize: 11, color: "var(--muted)" }}>Total siswa</div><div className="disp" style={{ fontSize: 22 }}>{guruStudents.length}</div></div>
+                      <div className="card" style={{ flex: 1, minWidth: 140 }}><div style={{ fontSize: 11, color: "var(--muted)" }}>Rata-rata penguasaan</div><div className="disp" style={{ fontSize: 22 }}>{guruAvgPct}%</div></div>
+                      <div className="card" style={{ flex: 1, minWidth: 140 }}><div style={{ fontSize: 11, color: "var(--muted)" }}>Konsep tersulit</div><div className="disp" style={{ fontSize: 16 }}>{guruHardestConcept}</div></div>
                     </div>
-                  )}
-                </div>
-              )}
-
-              {guruTab === "analitik" && (
-                <div className="card">
-                  <div className="tag-eyebrow">Heatmap miskonsepsi (seluruh siswa)</div>
-                  {allMisconceptions.length === 0 && <p style={{ fontSize: 13.5, color: "var(--muted)" }}>Belum ada miskonsepsi terdeteksi.</p>}
-                  {CONCEPT_ORDER.map((c) => {
-                    const items = allMisconceptions.filter((m) => m.concept === c);
-                    if (items.length === 0) return null;
-                    const counts = {};
-                    items.forEach((m) => { counts[m.tag] = (counts[m.tag] || 0) + 1; });
-                    return (
-                      <div key={c} style={{ marginBottom: 12 }}>
-                        <div style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 4 }}>{CONCEPTS[c].name}</div>
-                        {Object.entries(counts).map(([tag, n]) => (<div className="misc-item" key={tag} style={{ display: "inline-block", marginRight: 6 }}>{tag} × {n}</div>))}
+                    {guruStudents.length === 0 && !guruLoading && <p style={{ fontSize: 13.5, color: "var(--muted)" }}>Belum ada siswa yang terdaftar, atau belum ada aktivitas belajar.</p>}
+                    {CONCEPT_ORDER.map((c) => {
+                      const m = guruConceptMastery(c); const pct = m ? Math.round(m * 100) : 0;
+                      const st = m === null ? { tone: "neutral" } : (pct >= 75 ? { tone: "good" } : pct >= 40 ? { tone: "warn" } : { tone: "bad" });
+                      return (
+                        <div key={c} style={{ marginBottom: 12 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}><span>{CONCEPTS[c].name}</span><span>{m !== null ? pct + "%" : "–"}</span></div>
+                          <div className="bar-track"><div className="bar-fill" style={{ width: pct + "%", background: toneColor[st.tone] }} /></div>
+                        </div>
+                      );
+                    })}
+                    {guruStudents.length > 0 && (
+                      <div style={{ marginTop: 20 }}>
+                        <div className="tag-eyebrow">Daftar siswa</div>
+                        <table>
+                          <thead><tr><th>Nama</th><th>Kelas</th><th>Sekolah</th><th>Progress</th></tr></thead>
+                          <tbody>{guruStudents.map((s) => (<tr key={s.uid}><td>{s.name}</td><td>{s.kelas || "-"}</td><td>{s.sekolah || "-"}</td><td>{overallPctOf(s.attempts)}%</td></tr>))}</tbody>
+                        </table>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
+                    )}
+                  </div>
+                )}
 
-              {guruTab === "materi" && (
-                <div className="card">
-                  <div className="tag-eyebrow">Knowledge Base — contoh entri</div>
-                  <table>
-                    <thead><tr><th>ID</th><th>Nama konsep</th><th>Deskripsi</th><th>Prasyarat</th><th>Status</th></tr></thead>
-                    <tbody>{KB_ROWS.map((r) => (<tr key={r.id}><td className="mono">{r.id}</td><td>{r.nama}</td><td>{r.deskripsi}</td><td className="mono">{r.prereq}</td><td>{r.status}</td></tr>))}</tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-        </>
+                {guruTab === "analitik" && (
+                  <div className="card">
+                    <div className="tag-eyebrow">Heatmap miskonsepsi (seluruh siswa)</div>
+                    {allMisconceptions.length === 0 && <p style={{ fontSize: 13.5, color: "var(--muted)" }}>Belum ada miskonsepsi terdeteksi.</p>}
+                    {CONCEPT_ORDER.map((c) => {
+                      const items = allMisconceptions.filter((m) => m.concept === c);
+                      if (items.length === 0) return null;
+                      const counts = {};
+                      items.forEach((m) => { counts[m.tag] = (counts[m.tag] || 0) + 1; });
+                      return (
+                        <div key={c} style={{ marginBottom: 12 }}>
+                          <div style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 4 }}>{CONCEPTS[c].name}</div>
+                          {Object.entries(counts).map(([tag, n]) => (<div className="misc-item" key={tag} style={{ display: "inline-block", marginRight: 6 }}>{tag} × {n}</div>))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {guruTab === "materi" && (
+                  <div className="card">
+                    <div className="tag-eyebrow">Knowledge Base — contoh entri</div>
+                    <table>
+                      <thead><tr><th>ID</th><th>Nama konsep</th><th>Deskripsi</th><th>Prasyarat</th><th>Status</th></tr></thead>
+                      <tbody>{KB_ROWS.map((r) => (<tr key={r.id}><td className="mono">{r.id}</td><td>{r.nama}</td><td>{r.deskripsi}</td><td className="mono">{r.prereq}</td><td>{r.status}</td></tr>))}</tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1044,6 +1187,24 @@ function GlobalStyle() {
         .inputwrap { position:relative; }
         .inputwrap svg { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--muted); }
         .inputwrap input { padding-left:36px; }
+        .app-shell { display:flex; min-height:560px; }
+        .sidebar { width:216px; flex-shrink:0; background:white; border-right:1px solid var(--line); padding:18px 14px; display:flex; flex-direction:column; }
+        .sidebar-nav { display:flex; flex-direction:column; gap:3px; margin-top:18px; flex:1; }
+        .sidebar-navbtn { display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:12px; border:none; background:none; color:var(--muted); font-size:13.5px; font-weight:600; text-align:left; width:100%; }
+        .sidebar-navbtn.active { background:var(--brand-light); color:var(--brand-dark); }
+        .sidebar-profile-card { display:flex; align-items:center; gap:10px; padding:10px; border-radius:14px; background:var(--paper-2); margin-top:auto; }
+        .badge-card { border:1.5px solid var(--line); border-radius:16px; padding:16px; text-align:center; }
+        .badge-card.earned { border-color:var(--amber); background:var(--amber-light); }
+        .badge-card.locked { opacity:0.45; }
+        .streak-chip { display:inline-flex; align-items:center; gap:5px; background:var(--amber-light); color:#9A6414; padding:5px 12px; border-radius:999px; font-size:12.5px; font-weight:700; }
+        .xp-chip { display:inline-flex; align-items:center; gap:5px; background:var(--plum-light); color:var(--plum); padding:5px 12px; border-radius:999px; font-size:12.5px; font-weight:700; }
+        @media (max-width:680px) {
+          .app-shell { flex-direction:column; }
+          .sidebar { width:100%; flex-direction:row; align-items:center; overflow-x:auto; padding:10px 12px; border-right:none; border-bottom:1px solid var(--line); }
+          .sidebar-brand, .sidebar-profile-card { display:none; }
+          .sidebar-nav { flex-direction:row; margin-top:0; gap:4px; }
+          .sidebar-navbtn { flex-direction:column; gap:2px; font-size:10px; padding:8px 10px; white-space:nowrap; }
+        }
         .spin { animation: spin 0.8s linear infinite; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       `}</style>
