@@ -143,7 +143,7 @@ function ComicReader({ url, page, numPages, onLoaded, onPageChange, externalCanv
   useEffect(() => {
     let cancelled = false;
     setLoadError(false);
-    pdfjsLib.getDocument(url).promise
+    pdfjsLib.getDocument({ url }).promise
       .then((doc) => {
         if (cancelled) return;
         setPdfDoc(doc);
